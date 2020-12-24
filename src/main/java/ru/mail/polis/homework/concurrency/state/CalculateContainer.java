@@ -1,11 +1,14 @@
 package ru.mail.polis.homework.concurrency.state;
 
+
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 /**
- * Потокобезопасный контейнер для вычислений. Контейнер создается с некторым дэфолтным значеним.
+ * Потокобезопасный контейнер для вычислений. Контейнер создается с некоторым дэфолтным значением.
  * Далее значение инициализируется, вычисляется и отдается к потребителю. В каждом методе контейнер меняет состояние
  * и делает некоторое вычисление (которое передано ему в определенный метод)
  *
@@ -31,9 +34,14 @@ import java.util.function.UnaryOperator;
  */
 public class CalculateContainer<T> {
 
-    private State state = State.START;
-
+    private AtomicReference<State> state = new AtomicReference<>(State.START);
     private T result;
+
+    private final AtomicBoolean changedInit = new AtomicBoolean(true);
+    private final AtomicBoolean changedRun = new AtomicBoolean(false);
+    private final AtomicBoolean changedFinish = new AtomicBoolean(false);
+    private final AtomicBoolean changedClose = new AtomicBoolean(false);
+
 
     public CalculateContainer(T result) {
         this.result = result;
@@ -43,14 +51,34 @@ public class CalculateContainer<T> {
      * Инициализирует результат и переводит контейнер в состояние INIT (Возможно только из состояния START и FINISH)
      */
     public void init(UnaryOperator<T> initOperator) {
-
+        while (true) {
+            if(changedInit.get() && (state.compareAndSet(State.START, State.INIT) || !state.compareAndSet(State.FINISH, State.INIT))) {
+                result = initOperator.apply(result);
+                changedInit.set(false);
+                changedRun.set(true);
+                return;
+            } else if (state.get() == State.CLOSE) {
+                System.err.println("Close state in init!");
+                return;
+            }
+        }
     }
 
     /**
      * Вычисляет результат и переводит контейнер в состояние RUN (Возможно только из состояния INIT)
      */
     public void run(BinaryOperator<T> runOperator, T value) {
-
+        while (true) {
+            if(changedRun.get() && state.compareAndSet(State.INIT, State.RUN)) {
+                result = runOperator.apply(result, value);
+                changedRun.set(false);
+                changedFinish.set(true);
+                return;
+            } else if (state.get() == State.CLOSE) {
+                System.err.println("Close state in init!");
+                return;
+            }
+        }
     }
 
 
@@ -58,7 +86,18 @@ public class CalculateContainer<T> {
      * Передает результат потребителю и переводит контейнер в состояние FINISH (Возможно только из состояния RUN)
      */
     public void finish(Consumer<T> finishConsumer) {
-
+        while (true) {
+            if(changedFinish.get() && state.compareAndSet(State.RUN, State.FINISH)) {
+                finishConsumer.accept(result);
+                changedFinish.set(false);
+                changedClose.set(true);
+                changedInit.set(true);
+                return;
+            } else if (state.get() == State.CLOSE) {
+                System.err.println("Close state in init!");
+                return;
+            }
+        }
     }
 
 
@@ -67,7 +106,19 @@ public class CalculateContainer<T> {
      * (Возможно только из состояния FINISH)
      */
     public void close(Consumer<T> closeConsumer) {
-
+        while (true) {
+            if(changedClose.get() && state.compareAndSet(State.FINISH, State.CLOSE)) {
+                closeConsumer.accept(result);
+                changedInit.set(false);
+                changedRun.set(false);
+                changedFinish.set(false);
+                changedClose.set(false);
+                return;
+            } else if (state.get() == State.CLOSE) {
+                System.err.println("Close state in init!");
+                return;
+            }
+        }
     }
 
 
@@ -76,6 +127,7 @@ public class CalculateContainer<T> {
     }
 
     public State getState() {
-        return state;
+        return state.get();
     }
+
 }
